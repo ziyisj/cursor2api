@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>cursor2api 控制台</title>
+    <link rel="icon" href="/console/mark.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/console/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <div>
+            <strong>cursor2api</strong>
+            <span>控制台</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button type="button" id="connection" class="pill">
+            <span class="dot" id="connection-dot"></span>
+            <span id="connection-label">正在连接…</span>
+          </button>
+          <button type="button" id="open-settings" class="ghost">连接设置</button>
+        </div>
+      </header>
+      <div class="shell">
+        <div id="banner" class="banner" hidden></div>
+        <nav aria-label="控制台">
+          <button type="button" data-page="overview">概览</button>
+          <button type="button" data-page="chat">对话</button>
+          <button type="button" data-page="models">模型</button>
+          <button type="button" data-page="accounts">
+            账号 <span id="nav-accounts" class="nav-count"></span>
+          </button>
+          <div class="nav-foot">流量计入你自己的 Cursor 订阅额度。</div>
+        </nav>
+        <main>
+          <section id="page-overview" class="page">
+            <div class="page-head">
+              <div>
+                <h1>概览</h1>
+                <p class="hint">网关状态、接入地址和当前进程配置。</p>
+              </div>
+              <button type="button" id="refresh-status" class="ghost">刷新</button>
+            </div>
+            <div id="overview-body"></div>
+          </section>
+
+          <section id="page-chat" hidden>
+            <aside class="chat-side">
+              <label class="field">
+                <span>模型</span>
+                <input id="model-input" list="model-options" spellcheck="false" placeholder="选择或输入模型 id" autocomplete="off" />
+                <datalist id="model-options"></datalist>
+              </label>
+              <label class="field">
+                <span>系统提示</span>
+                <textarea id="system-input" rows="5" placeholder="可选。上游不接受真正的 system 角色，这段文字会作为开场说明送出。"></textarea>
+              </label>
+              <label class="field">
+                <span>工具 JSON</span>
+                <textarea id="tools-input" rows="8" spellcheck="false" placeholder='留空表示不声明工具。示例：[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]'></textarea>
+                <span id="tools-error" class="field-error"></span>
+              </label>
+              <div class="side-actions">
+                <button type="button" id="insert-tool" class="ghost">插入示例工具</button>
+                <label class="check"><input type="checkbox" id="stream-input" checked /> 流式输出</label>
+              </div>
+            </aside>
+            <div class="chat-main">
+              <div id="transcript" class="transcript"></div>
+              <form id="composer" class="composer">
+                <textarea id="composer-input" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+                <div class="composer-bar">
+                  <span class="hint">回复会计入你的 Cursor 订阅额度</span>
+                  <div class="composer-actions">
+                    <button type="button" id="copy-curl" class="ghost">复制 cURL</button>
+                    <button type="button" id="clear-chat" class="ghost">清空</button>
+                    <button type="button" id="stop-chat" class="ghost" hidden>停止</button>
+                    <button type="submit" id="send-chat" class="primary">发送</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section id="page-models" class="page" hidden>
+            <div class="page-head">
+              <div>
+                <h1>模型</h1>
+                <p class="hint" id="models-meta">尚未拉取。</p>
+              </div>
+              <div class="page-head-actions">
+                <input id="model-search" type="search" placeholder="搜索模型 id" />
+                <button type="button" id="reload-models" class="ghost">重新拉取</button>
+              </div>
+            </div>
+            <div id="models-body"></div>
+          </section>
+
+          <section id="page-accounts" class="page" hidden>
+            <div class="page-head">
+              <div>
+                <h1>账号</h1>
+                <p class="hint">生成 Cursor 登录链接，在浏览器里确认后账号自动进入轮询。</p>
+              </div>
+              <button type="button" id="refresh-accounts" class="ghost">刷新</button>
+            </div>
+            <div id="accounts-body"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form">
+        <div class="dialog-head">
+          <h2>连接设置</h2>
+          <button type="button" id="settings-close" class="ghost" aria-label="关闭">关闭</button>
+        </div>
+        <p class="hint">
+          控制台和接口在同一个地址。如果服务设置了 <code>CURSOR_DIRECT_API_KEY</code>，在这里填同一把密钥。密钥只保存在这台浏览器的 localStorage。
+        </p>
+        <label class="field">
+          <span>API Key</span>
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="未设置密钥时可留空" />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="api-key-toggle" class="ghost">显示</button>
+          <button type="button" id="api-key-clear" class="ghost">清除</button>
+          <button type="submit" class="primary">保存并重连</button>
+        </div>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status"></div>
+    <script src="/console/app.js" type="module"></script>
+  </body>
+</html>

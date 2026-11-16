@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package aiserver.v1;
+
+// Subset of Cursor's AvailableModels. Field numbers match the CLI.
+// Unknown fields stay forward-compatible.
+message AvailableModelsRequest {
+  optional bool use_model_parameters = 5;
+  optional bool include_hidden_models = 6;
+}
+
+message AvailableModelsResponse {
+  repeated ModelDetails models = 2;
+
+  message ModelDetails {
+    string name = 1;
+    bool default_on = 2;
+    optional bool is_chat_only = 4;
+    optional bool supports_agent = 5;
+    // 0 unspecified, 1 degraded, 2 disabled.
+    optional int32 degradation_status = 6;
+    optional bool only_supports_cmd_k = 27;
+    repeated ModelVariantConfig variants = 30;
+    optional bool is_hidden = 35;
+    optional string vendor_name = 41;
+    optional ModelVendor vendor = 42;
+  }
+
+  message ModelVendor {
+    int32 id = 1;
+    string display_name = 2;
+  }
+
+  message ModelVariantConfig {
+    optional bool is_max_mode = 3;
+    optional string legacy_slug = 11;
+  }
+}

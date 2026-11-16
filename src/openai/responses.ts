@@ -42,6 +42,11 @@ export interface ResponseDraft {
   usage?: { inputTokens?: number; outputTokens?: number };
 }
 
+/** Codex only expands a reasoning row when this is a non-empty string. */
+export function reasoningHandle(responseId: string): string {
+  return `${responseId}-0`;
+}
+
 export function completedResponse(draft: ResponseDraft): Record<string, unknown> {
   const output: unknown[] = [];
   if (draft.reasoning) {
@@ -50,7 +55,8 @@ export function completedResponse(draft: ResponseDraft): Record<string, unknown>
       type: "reasoning",
       status: "completed",
       content: [{ type: "reasoning_text", text: draft.reasoning }],
-      summary: [{ type: "summary_text", text: draft.reasoning }],
+      summary: [],
+      encrypted_content: reasoningHandle(draft.id),
     });
   }
   if (draft.text) {

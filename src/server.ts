@@ -18,7 +18,7 @@ import { saveApiKey } from "./settings.js";
 import { UPDATE_RESTART_CODE, applyUpdate, checkForUpdate } from "./update.js";
 import { listModelIds, toModelList, upstreamId } from "./models.js";
 import { runTurn, type TurnEvent } from "./cursor/session.js";
-import { completedResponse, responsesToChat, type ResponseDraft } from "./openai/responses.js";
+import { completedResponse, reasoningHandle, responsesToChat, type ResponseDraft } from "./openai/responses.js";
 import { buildTurnInput, type OpenAIChatRequest } from "./openai/translate.js";
 
 export interface ServerDeps {
@@ -321,7 +321,7 @@ async function collect(events: AsyncGenerator<TurnEvent>): Promise<Collected> {
 }
 
 function sendResponses(res: http.ServerResponse, result: Collected, clientModel: string): void {
-  const id = `resp_${randomUUID()}`;
+  const id = randomUUID();
   sendJson(
     res,
     200,
@@ -377,7 +377,7 @@ async function streamResponses(
   accountLabel: string,
   signal: AbortSignal,
 ): Promise<StreamEnd> {
-  const id = `resp_${randomUUID()}`;
+  const id = randomUUID();
   const messageId = `msg_${id}`;
   const reasoningId = `rs_${id}`;
   let opened = false;
@@ -413,7 +413,14 @@ async function streamResponses(
     reasoningIndex = outputIndex;
     writeEvent(res, "response.output_item.added", {
       output_index: reasoningIndex,
-      item: { id: reasoningId, type: "reasoning", status: "in_progress", content: [], summary: [] },
+      item: {
+        id: reasoningId,
+        type: "reasoning",
+        status: "in_progress",
+        content: [],
+        summary: [],
+        encrypted_content: reasoningHandle(id),
+      },
     });
     writeEvent(res, "response.content_part.added", {
       item_id: reasoningId,
@@ -459,7 +466,14 @@ async function streamResponses(
     });
     writeEvent(res, "response.output_item.done", {
       output_index: reasoningIndex,
-      item: { id: reasoningId, type: "reasoning", status: "completed", content: [textPart], summary: [part] },
+      item: {
+        id: reasoningId,
+        type: "reasoning",
+        status: "completed",
+        content: [textPart],
+        summary: [],
+        encrypted_content: reasoningHandle(id),
+      },
     });
     reasoningOpen = false;
     outputIndex = reasoningIndex + 1;

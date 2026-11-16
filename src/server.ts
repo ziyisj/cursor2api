@@ -379,13 +379,16 @@ async function streamResponses(
 ): Promise<StreamEnd> {
   const id = `resp_${randomUUID()}`;
   const messageId = `msg_${id}`;
+  const reasoningId = `rs_${id}`;
   let opened = false;
   let messageOpen = false;
+  let reasoningOpen = false;
   let text = "";
   let reasoning = "";
   const toolCalls: ResponseDraft["toolCalls"] = [];
   const usage: Collected["usage"] = {};
   let outputIndex = 0;
+  let reasoningIndex = 0;
 
   const open = (): void => {
     if (opened) return;
@@ -402,9 +405,51 @@ async function streamResponses(
     writeEvent(res, "response.in_progress", { response: { id, status: "in_progress" } });
   };
 
+  const openReasoning = (): void => {
+    if (reasoningOpen) return;
+    open();
+    closeMessage();
+    reasoningOpen = true;
+    reasoningIndex = outputIndex;
+    writeEvent(res, "response.output_item.added", {
+      output_index: reasoningIndex,
+      item: { id: reasoningId, type: "reasoning", status: "in_progress", summary: [] },
+    });
+    writeEvent(res, "response.reasoning_summary_part.added", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      summary_index: 0,
+      part: { type: "summary_text", text: "" },
+    });
+  };
+
+  const closeReasoning = (): void => {
+    if (!reasoningOpen) return;
+    const part = { type: "summary_text", text: reasoning };
+    writeEvent(res, "response.reasoning_summary_text.done", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      summary_index: 0,
+      text: reasoning,
+    });
+    writeEvent(res, "response.reasoning_summary_part.done", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      summary_index: 0,
+      part,
+    });
+    writeEvent(res, "response.output_item.done", {
+      output_index: reasoningIndex,
+      item: { id: reasoningId, type: "reasoning", status: "completed", summary: [part] },
+    });
+    reasoningOpen = false;
+    outputIndex = reasoningIndex + 1;
+  };
+
   const openMessage = (): void => {
     if (messageOpen) return;
     open();
+    closeReasoning();
     messageOpen = true;
     writeEvent(res, "response.output_item.added", {
       output_index: outputIndex,
@@ -457,10 +502,16 @@ async function streamResponses(
         delta: ev.delta,
       });
     } else if (ev.type === "thinking") {
-      open();
+      openReasoning();
       reasoning += ev.delta;
-      writeEvent(res, "response.reasoning_summary_text.delta", { delta: ev.delta });
+      writeEvent(res, "response.reasoning_summary_text.delta", {
+        item_id: reasoningId,
+        output_index: reasoningIndex,
+        summary_index: 0,
+        delta: ev.delta,
+      });
     } else if (ev.type === "tool_call") {
+      closeReasoning();
       closeMessage();
       open();
       const argumentsText = JSON.stringify(ev.args);
@@ -500,6 +551,7 @@ async function streamResponses(
         res.end();
         return { kind: "answered", code: ev.code, error: ev.error };
       }
+      closeReasoning();
       closeMessage();
       open();
       const response = completedResponse({ id, model: clientModel, text, reasoning, toolCalls, usage });
@@ -509,6 +561,7 @@ async function streamResponses(
     }
   }
 
+  closeReasoning();
   closeMessage();
   open();
   writeEvent(res, "response.completed", {

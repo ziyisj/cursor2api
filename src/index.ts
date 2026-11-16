@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { AccountPool } from "./auth.js";
 import { createServer } from "./server.js";
 import { applyStoredSettings } from "./settings.js";
+import { rememberBootRevision } from "./update.js";
 
 function log(msg: string): void {
   process.stdout.write(`${new Date().toISOString()} ${msg}\n`);
@@ -12,6 +13,7 @@ function log(msg: string): void {
 
 const config = loadConfig();
 applyStoredSettings(config);
+void rememberBootRevision();
 const pool = new AccountPool(config.authFile, log, config.proxyUrl);
 const server = createServer({ config, pool, log });
 

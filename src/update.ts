@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 export const UPDATE_RESTART_CODE = 75;
 const REPO = "ziyisj/cursor2api";
 const BRANCH = "main";
+let bootedSha: string | null = null;
 
 export function describeUpdate(local: string | null, remote: string | null): "current" | "available" | "unknown" {
   if (!local || !remote) return "unknown";
@@ -20,6 +21,10 @@ export interface UpdateStatus {
   remote: string | null;
   state: "current" | "available" | "unknown";
   message: string;
+}
+
+export async function rememberBootRevision(cwd = process.cwd()): Promise<void> {
+  bootedSha = await localHead(cwd);
 }
 
 export async function checkForUpdate(cwd = process.cwd()): Promise<UpdateStatus> {
@@ -37,11 +42,15 @@ export async function checkForUpdate(cwd = process.cwd()): Promise<UpdateStatus>
   } catch {
     /* leave remote empty and explain below */
   }
-  const state = describeUpdate(local, remote);
+  let state = describeUpdate(local, remote);
   let message = "已是 GitHub 上的最新版本。";
   if (!local) message = "当前目录不是 git 仓库，不能在线更新。";
   else if (!remote) message = "没有连上 GitHub，暂时不知道有没有新版本。";
   else if (state === "available") message = "GitHub 上有新版本。";
+  if (bootedSha && local && bootedSha !== local) {
+    state = "available";
+    message = `磁盘已经是 ${local.slice(0, 7)}，这次进程仍是更新前启动的。请再点更新并重启。`;
+  }
   return { local, remote, state, message };
 }
 
@@ -50,9 +59,14 @@ export async function applyUpdate(cwd = process.cwd()): Promise<string> {
   if (pulled.code !== 0) {
     throw new Error(pulled.stderr.trim() || "git pull 失败");
   }
-  const installed = await run(process.platform === "win32" ? "npm.cmd" : "npm", ["install", "--no-audit", "--no-fund"], cwd, true);
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const installed = await run(npm, ["install", "--no-audit", "--no-fund"], cwd, true);
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || "npm install 失败");
+  }
+  const built = await run(npm, ["run", "build:bundle"], cwd, true);
+  if (built.code !== 0) {
+    throw new Error(built.stderr.trim() || "重新打包失败");
   }
   return pulled.stdout.trim() || "已更新";
 }

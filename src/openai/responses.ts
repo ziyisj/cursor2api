@@ -48,6 +48,8 @@ export function completedResponse(draft: ResponseDraft): Record<string, unknown>
     output.push({
       id: `rs_${draft.id}`,
       type: "reasoning",
+      status: "completed",
+      content: [{ type: "reasoning_text", text: draft.reasoning }],
       summary: [{ type: "summary_text", text: draft.reasoning }],
     });
   }

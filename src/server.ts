@@ -413,7 +413,13 @@ async function streamResponses(
     reasoningIndex = outputIndex;
     writeEvent(res, "response.output_item.added", {
       output_index: reasoningIndex,
-      item: { id: reasoningId, type: "reasoning", status: "in_progress", summary: [] },
+      item: { id: reasoningId, type: "reasoning", status: "in_progress", content: [], summary: [] },
+    });
+    writeEvent(res, "response.content_part.added", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      content_index: 0,
+      part: { type: "reasoning_text", text: "" },
     });
     writeEvent(res, "response.reasoning_summary_part.added", {
       item_id: reasoningId,
@@ -425,7 +431,20 @@ async function streamResponses(
 
   const closeReasoning = (): void => {
     if (!reasoningOpen) return;
+    const textPart = { type: "reasoning_text", text: reasoning };
     const part = { type: "summary_text", text: reasoning };
+    writeEvent(res, "response.reasoning_text.done", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      content_index: 0,
+      text: reasoning,
+    });
+    writeEvent(res, "response.content_part.done", {
+      item_id: reasoningId,
+      output_index: reasoningIndex,
+      content_index: 0,
+      part: textPart,
+    });
     writeEvent(res, "response.reasoning_summary_text.done", {
       item_id: reasoningId,
       output_index: reasoningIndex,
@@ -440,7 +459,7 @@ async function streamResponses(
     });
     writeEvent(res, "response.output_item.done", {
       output_index: reasoningIndex,
-      item: { id: reasoningId, type: "reasoning", status: "completed", summary: [part] },
+      item: { id: reasoningId, type: "reasoning", status: "completed", content: [textPart], summary: [part] },
     });
     reasoningOpen = false;
     outputIndex = reasoningIndex + 1;
@@ -504,6 +523,12 @@ async function streamResponses(
     } else if (ev.type === "thinking") {
       openReasoning();
       reasoning += ev.delta;
+      writeEvent(res, "response.reasoning_text.delta", {
+        item_id: reasoningId,
+        output_index: reasoningIndex,
+        content_index: 0,
+        delta: ev.delta,
+      });
       writeEvent(res, "response.reasoning_summary_text.delta", {
         item_id: reasoningId,
         output_index: reasoningIndex,

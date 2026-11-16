@@ -100,17 +100,7 @@ test("status omits tokens and the console is served beside /health", async () =>
     assert.equal(head.status, 200);
     assert.equal(await head.text(), "");
 
-    const missingKey = await fetch(`${base}/console/api/status`);
-    assert.equal(missingKey.status, 401);
-
-    const wrongKey = await fetch(`${base}/console/api/status`, {
-      headers: { authorization: "Bearer no" },
-    });
-    assert.equal(wrongKey.status, 401);
-
-    const status = await fetch(`${base}/console/api/status`, {
-      headers: { "x-api-key": "console-test-key" },
-    });
+    const status = await fetch(`${base}/console/api/status`);
     assert.equal(status.status, 200);
     const body = await status.json();
     const encoded = JSON.stringify(body);
@@ -123,7 +113,15 @@ test("status omits tokens and the console is served beside /health", async () =>
     assert.equal(body.accounts.nextLabel, "desk");
 
     const denied = await fetch(`${base}/console/api/accounts`, { method: "POST", body: "{}" });
-    assert.equal(denied.status, 401);
+    assert.equal(denied.status, 400);
+    const modelsWithoutKey = await fetch(`${base}/v1/chat/completions`, { method: "POST", body: "{}" });
+    assert.equal(modelsWithoutKey.status, 401);
+    const modelsWithKey = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer console-test-key", "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(modelsWithKey.status, 400);
     const addedToken = "added-access-token-value-0123456789";
     const addedRefresh = "added-refresh-token-value";
     const created = await fetch(`${base}/console/api/accounts`, {

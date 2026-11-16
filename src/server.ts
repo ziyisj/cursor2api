@@ -13,6 +13,8 @@ import http from "node:http";
 import type { Config } from "./config.js";
 import { failoverCooldownMs, type Account, type AccountPool } from "./auth.js";
 import { buildStatus, handleAccountApi, serveConsole } from "./console.js";
+import { saveApiKey } from "./settings.js";
+import { UPDATE_RESTART_CODE, applyUpdate, checkForUpdate } from "./update.js";
 import { listModelIds, toModelList, upstreamId } from "./models.js";
 import { runTurn, type TurnEvent } from "./cursor/session.js";
 import { buildTurnInput, type OpenAIChatRequest } from "./openai/translate.js";
@@ -43,11 +45,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
   }
 
   if (url.pathname === "/console" || url.pathname.startsWith("/console/")) {
+    if (url.pathname === "/console/api/settings" || url.pathname === "/console/api/settings/") {
+      await handleSettings(req, res, deps);
+      return;
+    }
+    if (url.pathname === "/console/api/update" || url.pathname === "/console/api/update/") {
+      await handleUpdate(req, res, deps);
+      return;
+    }
     if (url.pathname === "/console/api/accounts" || url.pathname.startsWith("/console/api/accounts/")) {
-      if (!authorized(req, deps.config)) {
-        sendJson(res, 401, { error: { message: "invalid api key", type: "invalid_request_error" } });
-        return;
-      }
       await handleAccountApi(req, res, deps.pool, url.pathname, deps.config.proxyUrl);
       return;
     }
@@ -56,10 +62,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
       return;
     }
     if (url.pathname === "/console/api/status" || url.pathname === "/console/api/status/") {
-      if (!authorized(req, deps.config)) {
-        sendJson(res, 401, { error: { message: "invalid api key", type: "invalid_request_error" } });
-        return;
-      }
       sendJson(res, 200, buildStatus(deps));
       return;
     }
@@ -67,8 +69,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
     return;
   }
 
-  if (!authorized(req, deps.config)) {
-    sendJson(res, 401, { error: { message: "invalid api key", type: "invalid_request_error" } });
+  const access = modelAccess(req, deps.config);
+  if (!access.ok) {
+    sendJson(res, 401, { error: { message: access.message, type: "invalid_request_error" } });
     return;
   }
 
@@ -87,12 +90,57 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
   sendJson(res, 404, { error: { message: `no route for ${route}`, type: "invalid_request_error" } });
 }
 
-function authorized(req: http.IncomingMessage, config: Config): boolean {
-  if (!config.apiKey) return true;
+function presentedKey(req: http.IncomingMessage): string {
   const header = req.headers.authorization ?? "";
   const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   const alt = (req.headers["x-api-key"] as string | undefined) ?? "";
-  return bearer === config.apiKey || alt === config.apiKey;
+  return bearer || alt;
+}
+
+/** Third-party platforms must present the key. Until one is set, model calls stay closed. */
+function modelAccess(req: http.IncomingMessage, config: Config): { ok: true } | { ok: false; message: string } {
+  if (!config.apiKey) {
+    return { ok: false, message: "还没有调用密钥。请先在控制台的设置里添加，再交给第三方平台。" };
+  }
+  if (presentedKey(req) === config.apiKey) return { ok: true };
+  return { ok: false, message: "调用密钥不正确" };
+}
+
+async function handleSettings(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
+  if (req.method === "GET" || req.method === "HEAD") {
+    sendJson(res, 200, { apiKeySet: Boolean(deps.config.apiKey), apiKey: deps.config.apiKey ?? "" });
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: { message: "method not allowed", type: "invalid_request_error" } });
+    return;
+  }
+  try {
+    const body = JSON.parse(await readBody(req)) as { apiKey?: string };
+    saveApiKey(deps.config, body.apiKey ?? "");
+    sendJson(res, 200, { ok: true, apiKeySet: true, apiKey: deps.config.apiKey ?? "" });
+  } catch (err) {
+    sendJson(res, 400, { error: { message: (err as Error).message, type: "invalid_request_error" } });
+  }
+}
+
+async function handleUpdate(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
+  if (req.method === "GET" || req.method === "HEAD") {
+    sendJson(res, 200, await checkForUpdate());
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: { message: "method not allowed", type: "invalid_request_error" } });
+    return;
+  }
+  try {
+    const message = await applyUpdate();
+    sendJson(res, 200, { ok: true, message, restarting: true });
+    deps.log("update applied, restarting");
+    setTimeout(() => process.exit(UPDATE_RESTART_CODE), 400).unref();
+  } catch (err) {
+    sendJson(res, 500, { error: { message: (err as Error).message, type: "upstream_error" } });
+  }
 }
 
 async function chatCompletions(

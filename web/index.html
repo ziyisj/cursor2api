@@ -23,7 +23,7 @@
             <span class="dot" id="connection-dot"></span>
             <span id="connection-label">正在连接…</span>
           </button>
-          <button type="button" id="open-settings" class="ghost">连接设置</button>
+          <button type="button" id="open-settings" class="ghost">设置</button>
         </div>
       </header>
       <div class="shell">
@@ -118,20 +118,29 @@
     <dialog id="settings-dialog">
       <form id="settings-form">
         <div class="dialog-head">
-          <h2>连接设置</h2>
+          <h2>调用密钥</h2>
           <button type="button" id="settings-close" class="ghost" aria-label="关闭">关闭</button>
         </div>
         <p class="hint">
-          控制台和接口在同一个地址。如果服务设置了 <code>CURSOR_DIRECT_API_KEY</code>，在这里填同一把密钥。密钥只保存在这台浏览器的 localStorage。
+          和第三方网关一样：先在这里设一把密钥，外面的平台才能调模型。Base URL 用下面的地址，请求头带
+          <code>Authorization: Bearer 密钥</code>。没设密钥时，模型接口会直接拒绝。管理账号不需要这把密钥。
         </p>
+        <p class="hint" id="settings-base"></p>
         <label class="field">
-          <span>API Key</span>
-          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="未设置密钥时可留空" />
+          <span>调用密钥</span>
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="至少 8 位，不要有空格" />
         </label>
         <div class="dialog-actions">
+          <button type="button" id="api-key-generate" class="ghost">生成</button>
           <button type="button" id="api-key-toggle" class="ghost">显示</button>
-          <button type="button" id="api-key-clear" class="ghost">清除</button>
-          <button type="submit" class="primary">保存并重连</button>
+          <button type="button" id="api-key-copy" class="ghost">复制</button>
+          <button type="submit" class="primary">保存</button>
+        </div>
+        <h2>在线更新</h2>
+        <p class="hint" id="update-meta">还没有检查。</p>
+        <div class="dialog-actions">
+          <button type="button" id="update-check" class="ghost">检查更新</button>
+          <button type="button" id="update-apply" class="primary">更新并重启</button>
         </div>
       </form>
     </dialog>

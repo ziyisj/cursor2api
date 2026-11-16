@@ -51,23 +51,38 @@ if (mode === "public") {
 
 printUrls();
 console.log("关闭这个窗口就会停止服务。");
-waitAndOpen(`http://127.0.0.1:${port}/console`);
 
 const tsx = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-const child = spawn(process.execPath, [tsx, "src/index.ts"], {
-  cwd: root,
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    ...Object.fromEntries(readEnv(envFile)),
-    CURSOR_DIRECT_HOST: host,
-    CURSOR_DIRECT_PORT: String(port),
-    CURSOR_DIRECT_PROTO_DIR: path.join(root, "proto"),
-    CURSOR_DIRECT_WEB_DIR: path.join(root, "web"),
-    ...(apiKey ? { CURSOR_DIRECT_API_KEY: apiKey } : {}),
-  },
-});
-child.on("exit", (code) => process.exit(code ?? 0));
+let exitCode = 0;
+let browserOpened = false;
+do {
+  exitCode = await runServer();
+  if (exitCode === 75) console.log("更新完成，正在重新启动…");
+} while (exitCode === 75);
+process.exit(exitCode);
+
+function runServer() {
+  const stored = readEnv(envFile);
+  const key = stored.get("CURSOR_DIRECT_API_KEY") || apiKey;
+  const child = spawn(process.execPath, [tsx, "src/index.ts"], {
+    cwd: root,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      ...Object.fromEntries(stored),
+      CURSOR_DIRECT_HOST: host,
+      CURSOR_DIRECT_PORT: String(port),
+      CURSOR_DIRECT_PROTO_DIR: path.join(root, "proto"),
+      CURSOR_DIRECT_WEB_DIR: path.join(root, "web"),
+      ...(key ? { CURSOR_DIRECT_API_KEY: key } : {}),
+    },
+  });
+  if (!browserOpened) {
+    browserOpened = true;
+    waitAndOpen(`http://127.0.0.1:${port}/console`);
+  }
+  return new Promise((resolve) => child.on("exit", (code) => resolve(code ?? 0)));
+}
 
 async function chooseMode() {
   const arg = (process.argv[2] || "").toLowerCase();

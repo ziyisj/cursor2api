@@ -4,12 +4,14 @@
 import { loadConfig } from "./config.js";
 import { AccountPool } from "./auth.js";
 import { createServer } from "./server.js";
+import { applyStoredSettings } from "./settings.js";
 
 function log(msg: string): void {
   process.stdout.write(`${new Date().toISOString()} ${msg}\n`);
 }
 
 const config = loadConfig();
+applyStoredSettings(config);
 const pool = new AccountPool(config.authFile, log, config.proxyUrl);
 const server = createServer({ config, pool, log });
 

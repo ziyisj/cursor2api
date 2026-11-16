@@ -5,6 +5,7 @@ dist/
 # Local credentials — never commit these.
 accounts.json
 accounts.*.json
+settings.json
 .env
 .env.*
 !.env.example

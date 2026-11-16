@@ -51,6 +51,8 @@ bash deploy.sh public
 
 外网访问还要在防火墙或云安全组放行 TCP 8790。`.env` 和 `accounts.json` 不会进 git。
 
+控制台右上角的「设置」里可以添加调用密钥。没设密钥时，模型接口拒绝访问。设好之后，第三方平台把 Base URL 指到 `http://<地址>:8790/v1`，请求头带 `Authorization: Bearer 密钥`。同一页可以检查 GitHub 上的新版本并更新重启。用 `deploy.cmd` 或 `deploy.sh` 启动时，更新后会自动重新打开。
+
 ### Docker Compose（推荐）
 
 ```bash

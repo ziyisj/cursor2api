@@ -86,7 +86,7 @@ export function resolveWebRoot(): string {
  */
 export function resolveConsoleFile(pathname: string, root = resolveWebRoot()): string | null {
   if (pathname !== "/console" && !pathname.startsWith("/console/")) return null;
-  if (pathname === "/console/api/status" || pathname === "/console/api/status/") return null;
+  if (pathname.startsWith("/console/api/")) return null;
   let rel = pathname.slice("/console".length).replace(/^\/+/, "");
   if (rel === "") rel = "index.html";
   if (rel.includes("\\") || rel.includes("\0")) return null;

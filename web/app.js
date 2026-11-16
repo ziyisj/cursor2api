@@ -43,6 +43,7 @@ const state = {
   authError: false,
   loading: true,
   models: [],
+  update: null,
   modelsError: "",
   modelsLoading: false,
   modelQuery: "",
@@ -161,11 +162,11 @@ function renderBanner() {
     );
     return;
   }
-  if (state.authError) {
+  if (state.status && state.status.config.apiKeyRequired === false) {
     banner.hidden = false;
     banner.append(
-      h("span", {}, "这台服务要求 API Key。填入和 CURSOR_DIRECT_API_KEY 相同的密钥。"),
-      h("button", { type: "button", class: "ghost", onclick: () => openSettings() }, "填写密钥"),
+      h("span", {}, "还没有调用密钥。第三方平台现在不能调模型。"),
+      h("button", { type: "button", class: "ghost", onclick: () => openSettings() }, "去设置"),
     );
     return;
   }
@@ -261,9 +262,12 @@ function renderOverview() {
               kv("超时", `${Math.round(config.timeoutMs / 1000)} 秒`),
               kv("代理", config.proxyEnabled ? "SOCKS5 已配置" : "直连"),
               kv("system 消息", config.systemAsHistory ? "改写成开场对话" : "原样发送"),
-              kv("API Key", config.apiKeyRequired ? "必须" : "未启用"),
+              kv("调用密钥", config.apiKeyRequired ? "已设置，第三方平台必须携带" : "未设置，模型接口已关闭"),
             ])
           : h("p", { class: "hint" }, "还没有读到进程配置。"),
+        state.update
+          ? h("p", { class: "hint" }, `在线更新：${state.update.message}`)
+          : h("p", { class: "hint" }, "在线更新可以在设置里检查。"),
       ]),
     ]),
   );
@@ -299,8 +303,8 @@ function accountBadge(item) {
 function renderAccounts() {
   const root = $("accounts-body");
   root.replaceChildren();
-  if (state.authError) {
-    root.append(h("div", { class: "callout" }, h("p", {}, "填写 API Key 之后才能管理账号池。")));
+  if (state.statusError) {
+    root.append(h("div", { class: "callout bad" }, h("p", {}, state.statusError)));
     return;
   }
   const next = state.status?.accounts.nextLabel;
@@ -825,17 +829,26 @@ async function refresh() {
     state.health = await healthRes.json();
     state.healthError = "";
     const statusRes = await fetch("/console/api/status", { headers: authHeaders() });
-    if (statusRes.status === 401) {
-      state.authError = true;
-      state.status = null;
-      state.statusError = "";
-    } else if (!statusRes.ok) {
+    if (!statusRes.ok) {
       state.authError = false;
       state.statusError = await errorMessage(statusRes);
+      state.status = null;
     } else {
       state.authError = false;
       state.statusError = "";
       state.status = await statusRes.json();
+      if (state.status?.config.apiKeyRequired) {
+        const settingsRes = await fetch("/console/api/settings");
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          if (settings.apiKey) {
+            state.apiKey = settings.apiKey;
+            localStorage.setItem(KEYS.apiKey, settings.apiKey);
+          }
+        }
+      }
+      const updateRes = await fetch("/console/api/update");
+      if (updateRes.ok) state.update = await updateRes.json();
     }
   } catch {
     state.health = null;
@@ -865,8 +878,7 @@ async function loadModels() {
   try {
     const res = await fetch("/v1/models", { headers: authHeaders() });
     if (res.status === 401) {
-      state.authError = true;
-      state.modelsError = "密钥被拒绝。";
+      state.modelsError = await errorMessage(res);
       renderBanner();
       renderConnection();
       return;
@@ -1058,11 +1070,83 @@ function sendComposer(event) {
   complete();
 }
 
-function openSettings() {
+async function openSettings() {
+  $("settings-base").textContent = `Base URL  ${location.origin}/v1`;
   $("api-key").value = state.apiKey;
   $("api-key").type = "password";
   $("api-key-toggle").textContent = "显示";
+  renderUpdateMeta();
   $("settings-dialog").showModal();
+  try {
+    const res = await fetch("/console/api/settings");
+    if (res.ok) {
+      const body = await res.json();
+      if (body.apiKey) $("api-key").value = body.apiKey;
+    }
+  } catch {
+    /* the field keeps whatever the browser already stored */
+  }
+  checkUpdate();
+}
+
+function renderUpdateMeta() {
+  const meta = $("update-meta");
+  if (!meta) return;
+  const update = state.update;
+  if (!update) {
+    meta.textContent = "还没有检查。";
+    return;
+  }
+  const local = update.local ? update.local.slice(0, 7) : "未知";
+  meta.textContent = `${update.message} 当前 ${local}`;
+}
+
+async function checkUpdate() {
+  const meta = $("update-meta");
+  if (meta) meta.textContent = "正在向 GitHub 查询…";
+  try {
+    const res = await fetch("/console/api/update");
+    if (!res.ok) throw new Error(await errorMessage(res));
+    state.update = await res.json();
+  } catch (err) {
+    state.update = { local: null, remote: null, state: "unknown", message: err.message || "检查失败" };
+  }
+  renderUpdateMeta();
+  renderOverview();
+}
+
+async function saveCallerKey(event) {
+  event.preventDefault();
+  const apiKey = $("api-key").value.trim();
+  const res = await fetch("/console/api/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    toast(await errorMessage(res));
+    return;
+  }
+  const body = await res.json();
+  state.apiKey = body.apiKey || apiKey;
+  localStorage.setItem(KEYS.apiKey, state.apiKey);
+  $("settings-dialog").close();
+  toast("调用密钥已保存。第三方平台用这把密钥调模型。");
+  refresh();
+}
+
+async function applyUpdate() {
+  if (!confirm("拉取 GitHub 上的新版本并重启服务？")) return;
+  const meta = $("update-meta");
+  if (meta) meta.textContent = "正在更新…";
+  const res = await fetch("/console/api/update", { method: "POST" });
+  if (!res.ok) {
+    toast(await errorMessage(res));
+    checkUpdate();
+    return;
+  }
+  toast("正在重启，几秒后刷新页面。");
+  setTimeout(() => location.reload(), 1500);
 }
 
 function restoreDrafts() {
@@ -1093,12 +1177,22 @@ function bind() {
   $("refresh-accounts").addEventListener("click", () => refresh());
   $("open-settings").addEventListener("click", () => openSettings());
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
-  $("settings-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    state.apiKey = $("api-key").value.trim();
-    localStorage.setItem(KEYS.apiKey, state.apiKey);
-    $("settings-dialog").close();
-    refresh();
+  $("settings-form").addEventListener("submit", saveCallerKey);
+  $("api-key-generate").addEventListener("click", () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const key = `c2a_${btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")}`;
+    $("api-key").value = key;
+    $("api-key").type = "text";
+    $("api-key-toggle").textContent = "隐藏";
+  });
+  $("api-key-copy").addEventListener("click", () => {
+    const key = $("api-key").value.trim();
+    if (!key) {
+      toast("还没有密钥");
+      return;
+    }
+    copyText(`${location.origin}/v1\n${key}`);
   });
   $("api-key-toggle").addEventListener("click", () => {
     const input = $("api-key");
@@ -1106,9 +1200,8 @@ function bind() {
     input.type = show ? "text" : "password";
     $("api-key-toggle").textContent = show ? "隐藏" : "显示";
   });
-  $("api-key-clear").addEventListener("click", () => {
-    $("api-key").value = "";
-  });
+  $("update-check").addEventListener("click", () => checkUpdate());
+  $("update-apply").addEventListener("click", () => applyUpdate());
   $("reload-models").addEventListener("click", () => loadModels());
   $("model-search").addEventListener("input", (event) => {
     state.modelQuery = event.target.value;

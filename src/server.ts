@@ -2,6 +2,7 @@
  * OpenAI-compatible HTTP surface, plus the browser console.
  *
  * Routes: GET /health, GET /v1/models, POST /v1/chat/completions,
+ * POST /v1/responses,
  * GET /console (static), GET /console/api/status.
  * Designed to sit on 127.0.0.1 behind CLIProxyAPI's `openai-compatibility`
  * upstream. There is no CORS: the console is served by this process and talks
@@ -17,6 +18,7 @@ import { saveApiKey } from "./settings.js";
 import { UPDATE_RESTART_CODE, applyUpdate, checkForUpdate } from "./update.js";
 import { listModelIds, toModelList, upstreamId } from "./models.js";
 import { runTurn, type TurnEvent } from "./cursor/session.js";
+import { completedResponse, responsesToChat, type ResponseDraft } from "./openai/responses.js";
 import { buildTurnInput, type OpenAIChatRequest } from "./openai/translate.js";
 
 export interface ServerDeps {
@@ -83,7 +85,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
   }
 
   if (route === "POST /v1/chat/completions") {
-    await chatCompletions(req, res, deps, url);
+    await chatCompletions(req, res, deps);
+    return;
+  }
+
+  if (route === "POST /v1/responses") {
+    await responses(req, res, deps);
     return;
   }
 
@@ -143,13 +150,18 @@ async function handleUpdate(req: http.IncomingMessage, res: http.ServerResponse,
   }
 }
 
-async function chatCompletions(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  deps: ServerDeps,
-  _url: URL,
-): Promise<void> {
-  const { config, pool, log } = deps;
+async function responses(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readBody(req));
+  } catch (err) {
+    sendJson(res, 400, { error: { message: `bad JSON body: ${(err as Error).message}` } });
+    return;
+  }
+  await serveChat(responsesToChat((raw ?? {}) as Parameters<typeof responsesToChat>[0]), req, res, deps, "responses");
+}
+
+async function chatCompletions(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
   let body: OpenAIChatRequest;
   try {
     body = JSON.parse(await readBody(req)) as OpenAIChatRequest;
@@ -157,7 +169,17 @@ async function chatCompletions(
     sendJson(res, 400, { error: { message: `bad JSON body: ${(err as Error).message}` } });
     return;
   }
+  await serveChat(body, req, res, deps, "chat");
+}
 
+async function serveChat(
+  body: OpenAIChatRequest,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+  format: "chat" | "responses",
+): Promise<void> {
+  const { config, pool, log } = deps;
   const clientModel = body.model ?? `${config.modelPrefix}auto`;
   const input = buildTurnInput(body, config);
   const abort = new AbortController();
@@ -214,7 +236,10 @@ async function chatCompletions(
     });
 
     if (body.stream) {
-      const outcome = await streamResponse(res, events, clientModel, deps, account.label, abort.signal);
+      const outcome =
+        format === "responses"
+          ? await streamResponses(res, events, clientModel, deps, account.label, abort.signal)
+          : await streamResponse(res, events, clientModel, deps, account.label, abort.signal);
       if (outcome.kind === "ok") {
         pool.noteUse(account);
         return;
@@ -259,7 +284,8 @@ async function chatCompletions(
       return;
     }
     pool.noteUse(account);
-    sendBuffered(res, result, clientModel, account.label);
+    if (format === "responses") sendResponses(res, result, clientModel);
+    else sendBuffered(res, result, clientModel, account.label);
     return;
   }
 }
@@ -294,6 +320,26 @@ async function collect(events: AsyncGenerator<TurnEvent>): Promise<Collected> {
   return out;
 }
 
+function sendResponses(res: http.ServerResponse, result: Collected, clientModel: string): void {
+  const id = `resp_${randomUUID()}`;
+  sendJson(
+    res,
+    200,
+    completedResponse({
+      id,
+      model: clientModel,
+      text: result.text,
+      reasoning: result.reasoning,
+      toolCalls: result.toolCalls.map((call) => ({
+        id: call.id,
+        name: call.name,
+        arguments: JSON.stringify(call.args),
+      })),
+      usage: result.usage,
+    }),
+  );
+}
+
 function sendBuffered(res: http.ServerResponse, result: Collected, clientModel: string, accountLabel: string): void {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -321,6 +367,159 @@ function sendBuffered(res: http.ServerResponse, result: Collected, clientModel: 
     ],
     usage: usageBlock(result.usage),
   });
+}
+
+async function streamResponses(
+  res: http.ServerResponse,
+  events: AsyncGenerator<TurnEvent>,
+  clientModel: string,
+  deps: ServerDeps,
+  accountLabel: string,
+  signal: AbortSignal,
+): Promise<StreamEnd> {
+  const id = `resp_${randomUUID()}`;
+  const messageId = `msg_${id}`;
+  let opened = false;
+  let messageOpen = false;
+  let text = "";
+  let reasoning = "";
+  const toolCalls: ResponseDraft["toolCalls"] = [];
+  const usage: Collected["usage"] = {};
+  let outputIndex = 0;
+
+  const open = (): void => {
+    if (opened) return;
+    opened = true;
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    writeEvent(res, "response.created", {
+      response: { id, object: "response", status: "in_progress", model: clientModel, output: [] },
+    });
+    writeEvent(res, "response.in_progress", { response: { id, status: "in_progress" } });
+  };
+
+  const openMessage = (): void => {
+    if (messageOpen) return;
+    open();
+    messageOpen = true;
+    writeEvent(res, "response.output_item.added", {
+      output_index: outputIndex,
+      item: { id: messageId, type: "message", status: "in_progress", role: "assistant", content: [] },
+    });
+    writeEvent(res, "response.content_part.added", {
+      item_id: messageId,
+      output_index: outputIndex,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    });
+  };
+
+  const closeMessage = (): void => {
+    if (!messageOpen) return;
+    writeEvent(res, "response.output_text.done", {
+      item_id: messageId,
+      output_index: outputIndex,
+      content_index: 0,
+      text,
+    });
+    writeEvent(res, "response.content_part.done", {
+      item_id: messageId,
+      output_index: outputIndex,
+      content_index: 0,
+      part: { type: "output_text", text, annotations: [] },
+    });
+    writeEvent(res, "response.output_item.done", {
+      output_index: outputIndex,
+      item: {
+        id: messageId,
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+    });
+    messageOpen = false;
+    outputIndex += 1;
+  };
+
+  for await (const ev of events) {
+    if (ev.type === "text") {
+      openMessage();
+      text += ev.delta;
+      writeEvent(res, "response.output_text.delta", {
+        item_id: messageId,
+        output_index: outputIndex,
+        content_index: 0,
+        delta: ev.delta,
+      });
+    } else if (ev.type === "thinking") {
+      open();
+      reasoning += ev.delta;
+      writeEvent(res, "response.reasoning_summary_text.delta", { delta: ev.delta });
+    } else if (ev.type === "tool_call") {
+      closeMessage();
+      open();
+      const argumentsText = JSON.stringify(ev.args);
+      const item = {
+        id: `fc_${ev.id}`,
+        type: "function_call",
+        status: "completed",
+        call_id: ev.id,
+        name: ev.name,
+        arguments: argumentsText,
+      };
+      toolCalls.push({ id: ev.id, name: ev.name, arguments: argumentsText });
+      const index = outputIndex++;
+      writeEvent(res, "response.output_item.added", { output_index: index, item });
+      writeEvent(res, "response.function_call_arguments.done", {
+        item_id: item.id,
+        output_index: index,
+        arguments: argumentsText,
+      });
+      writeEvent(res, "response.output_item.done", { output_index: index, item });
+    } else if (ev.type === "usage") {
+      if (ev.inputTokens !== undefined) usage.inputTokens = ev.inputTokens;
+      if (ev.outputTokens !== undefined) usage.outputTokens = ev.outputTokens;
+    } else if (ev.type === "done") {
+      if (ev.reason === "error") {
+        deps.log(`upstream error (${accountLabel}): ${ev.error}`);
+        const wait = failoverCooldownMs(ev.code);
+        if (!opened && wait !== null && !signal.aborted) {
+          return { kind: "failover", code: ev.code, error: ev.error };
+        }
+        const { status, body } = upstreamError(ev.code, ev.error);
+        if (!opened) {
+          if (!signal.aborted) sendJson(res, status, { ...body, cursor2api_account: accountLabel });
+          return { kind: "answered", code: ev.code, error: ev.error };
+        }
+        writeEvent(res, "response.failed", { response: { id, status: "failed", error: body.error } });
+        res.end();
+        return { kind: "answered", code: ev.code, error: ev.error };
+      }
+      closeMessage();
+      open();
+      const response = completedResponse({ id, model: clientModel, text, reasoning, toolCalls, usage });
+      writeEvent(res, "response.completed", { response });
+      res.end();
+      return { kind: "ok" };
+    }
+  }
+
+  closeMessage();
+  open();
+  writeEvent(res, "response.completed", {
+    response: completedResponse({ id, model: clientModel, text, reasoning, toolCalls, usage }),
+  });
+  res.end();
+  return { kind: "ok" };
+}
+
+function writeEvent(res: http.ServerResponse, type: string, payload: Record<string, unknown>): void {
+  res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
 }
 
 type StreamEnd =

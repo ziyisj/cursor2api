@@ -182,8 +182,8 @@ export async function handleAccountApi(
       const raw = await readJsonBody(req);
       const body = raw.trim() ? (JSON.parse(raw) as { label?: string }) : {};
       const label = (body.label ?? "").trim();
-      if (label && !/^[^\s/\\#?%]{1,64}$/.test(label)) {
-        writeJson(res, 400, { error: { message: "账号标签只能用 1–64 位、不能含空格或 / \\", type: "invalid_request_error" } });
+      if (label && !/^[^\s/\\#?%]{1,128}$/.test(label)) {
+        writeJson(res, 400, { error: { message: "账号标签只能用 1–128 位、不能含空格或 / \\", type: "invalid_request_error" } });
         return;
       }
       const started = beginLogin(label, pool, proxyUrl);

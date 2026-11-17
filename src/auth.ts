@@ -14,6 +14,7 @@
  */
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { h2Request } from "./cursor/h2.js";
+import { fetchCursorEmail } from "./cursor/profile.js";
 
 const REFRESH_BASE = "https://api2.cursor.sh";
 const REFRESH_PATH = "/auth/exchange_user_api_key";
@@ -73,6 +74,7 @@ export class AccountPool {
   private accounts: Account[] = [];
   private cursor = 0;
   private mtimeMs = 0;
+  private emailChecked = new Set<string>();
 
   constructor(
     private readonly file: string,
@@ -99,6 +101,33 @@ export class AccountPool {
       .map((a, i) => ({ ...a, label: a.label || `account-${i + 1}` }));
     this.mtimeMs = st.mtimeMs;
     this.log(`loaded ${this.accounts.length} cursor account(s) from ${this.file}`);
+  }
+
+  /**
+   * Replace id-style labels with the Cursor account email. Already-email labels
+   * are left alone. A failed lookup is remembered so status polling does not
+   * call GetMe on every refresh.
+   */
+  async ensureEmailLabels(): Promise<void> {
+    this.reload();
+    let changed = false;
+    for (const account of this.accounts) {
+      if (account.label.includes("@") || this.emailChecked.has(account.accessToken)) continue;
+      let email = "";
+      try {
+        email = await fetchCursorEmail(account.accessToken, this.proxyUrl);
+      } catch {
+        continue;
+      }
+      this.emailChecked.add(account.accessToken);
+      if (!email || !validLabel(email)) continue;
+      if (this.accounts.some((other) => other !== account && other.label === email)) continue;
+      const previous = account.label;
+      account.label = email;
+      changed = true;
+      this.log(`renamed account ${previous} to ${email}`);
+    }
+    if (changed) this.persist();
   }
 
   /** Healthy account count. */
@@ -156,7 +185,7 @@ export class AccountPool {
   add(input: { label: string; accessToken: string; refreshToken?: string }, replace = false): { label: string; replaced: boolean } {
     this.reload();
     const label = input.label.trim();
-    if (!validLabel(label)) throw new Error("账号标签只能用 1–64 位、不能含空格或 / \\");
+    if (!validLabel(label)) throw new Error("账号标签只能用 1–128 位、不能含空格或 / \\");
     const accessToken = input.accessToken.trim();
     if (accessToken.length < 20 || accessToken.length > 20_000) throw new Error("access token 长度不对");
     const refresh = input.refreshToken?.trim();
@@ -303,7 +332,7 @@ function isDisabled(account: Account): boolean {
 }
 
 function validLabel(label: string): boolean {
-  return label.length >= 1 && label.length <= 64 && !/[\s/\\#?%]/.test(label) && label !== "." && label !== "..";
+  return label.length >= 1 && label.length <= 128 && !/[\s/\\#?%]/.test(label) && label !== "." && label !== "..";
 }
 
 export async function exchangeRefreshToken(

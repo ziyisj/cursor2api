@@ -64,6 +64,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, deps:
       return;
     }
     if (url.pathname === "/console/api/status" || url.pathname === "/console/api/status/") {
+      await deps.pool.ensureEmailLabels();
       sendJson(res, 200, buildStatus(deps));
       return;
     }

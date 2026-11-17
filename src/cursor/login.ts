@@ -9,6 +9,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AccountPool } from "../auth.js";
 import { h2Request } from "./h2.js";
+import { fetchCursorEmail } from "./profile.js";
 
 const LOGIN_URL = "https://www.cursor.com/loginDeepControl";
 const POLL_BASE = "https://api2.cursor.sh";
@@ -120,7 +121,7 @@ async function poll(attempt: Attempt, pool: AccountPool, proxyUrl: string | unde
   }
   if (got.tokens) {
     try {
-      const label = chooseLabel(attempt.label, got.tokens.accessToken, got.tokens.authId, pool);
+      const label = await chooseLabel(attempt.label, got.tokens.accessToken, got.tokens.authId, pool, proxyUrl);
       const saved = pool.add(
         {
           label,
@@ -220,7 +221,16 @@ function note(message: string): void {
   process.stdout.write(`${new Date().toISOString()} login ${message}\n`);
 }
 
-function chooseLabel(requested: string, accessToken: string, authId: string | undefined, pool: AccountPool): string {
+async function chooseLabel(
+  requested: string,
+  accessToken: string,
+  authId: string | undefined,
+  pool: AccountPool,
+  proxyUrl: string | undefined,
+): Promise<string> {
+  if (requested.includes("@") && safeLabel(requested)) return requested;
+  const lookedUp = await fetchCursorEmail(accessToken, proxyUrl).catch(() => "");
+  if (lookedUp && safeLabel(lookedUp)) return lookedUp;
   if (requested) return requested;
   const claims = jwtObject(accessToken);
   const email = typeof claims.email === "string" ? claims.email : "";
@@ -245,7 +255,7 @@ function jwtObject(token: string): Record<string, unknown> {
 }
 
 function safeLabel(label: string): boolean {
-  return label.length >= 1 && label.length <= 64 && !/[\s/\\#?%]/.test(label);
+  return label.length >= 1 && label.length <= 128 && !/[\s/\\#?%]/.test(label);
 }
 
 function base64url(buf: Buffer): string {
